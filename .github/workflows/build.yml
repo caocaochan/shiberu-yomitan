@@ -1,0 +1,70 @@
+name: Build dictionary
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Every Monday: check shiberu.app for a newer word list.
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check shiberu.app for a newer word list
+        if: github.event_name != 'push'
+        run: python update.py
+
+      - name: Commit the new word list
+        if: github.event_name != 'push'
+        run: |
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "Nothing new upstream."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data VERSION
+          git commit -m "Update word list to $(cat VERSION)"
+          git push
+
+      - name: Build
+        run: python build.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Shiberu_Korean_Frequency
+          path: dist/
+
+      - name: Publish a release for a new VERSION
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(cat VERSION)"
+          if gh release view "$version" > /dev/null 2>&1; then
+            echo "Release $version already exists; bump VERSION to publish a new one."
+            exit 0
+          fi
+          gh release create "$version" dist/Shiberu_Korean_Frequency.zip dist/Shiberu_Korean_Frequency.json \
+            --target "$(git rev-parse HEAD)" \
+            --latest \
+            --title "Shiberu $version" \
+            --notes "Shiberu Korean frequency dictionary for Yomitan, revision $version.
+
+          Import **Shiberu_Korean_Frequency.zip** in Yomitan (Settings → Dictionaries → Import). Yomitan can update it later with **Check for updates**.
+
+          Word list: Shiberu Korean Word Frequency List by Shiberu (https://shiberu.app/korean-frequency-list), CC BY 4.0."
